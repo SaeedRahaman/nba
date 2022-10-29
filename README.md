@@ -1,0 +1,1 @@
+Uses the NBA API wrapper from https://github.com/swar/nba_api to get NBA league standings, the score of the last played game for the GSW and the time and channel for the next GSW game.
