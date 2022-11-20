@@ -4,7 +4,7 @@ from nba_api.stats.endpoints import leaguestandingsv3, boxscoresummaryv2
 import requests
 import json
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 PRESEASON_DATE = "2022-10-17"
 T = datetime.now()
@@ -25,20 +25,28 @@ def get_team_id(team_name: str) -> int:
 def get_league_standings() -> pd.DataFrame:
     standings = leaguestandingsv3.LeagueStandingsV3().standings.get_data_frame()
     small_standings = standings[["TeamName", "Conference", "Record"]].copy()
-    small_standings.sort_values(by=["Conference", "Record"], ascending=False,  inplace=True)
+
+    # split records column into wins and losses for better sorting
+    temp = small_standings["Record"].str.split("-", expand=True)
+    small_standings["Wins"] = temp[0].astype(int)
+    small_standings["Loses"] = temp[1].astype(int)
+    
+    # re-sort index
+    small_standings.sort_values(by=["Conference", "Wins"], ascending=False, inplace=True)
     small_standings = small_standings.reset_index(drop=True)
 
     # blank row to divide conferences
-    small_standings.loc[14.5] = "", "", ""
-
-    # re-sort index
+    small_standings.loc[14.5] = "", "", "", "", ""
     small_standings = small_standings.sort_index().reset_index(drop=True)
+
+    small_standings.drop(labels=["Wins", "Loses"], axis=1, inplace=True)
 
     return small_standings
 
 
 def get_last_game_score(games: pd.DataFrame) -> pd.DataFrame:
-    prev_games = games.loc[(games["gameDateTimeEst"] < T)]
+    prev_games = games.loc[(games["date"] < T.date())]
+
     last_game = prev_games.iloc[-1]
     last_game_id = last_game["gameId"]
 
@@ -49,21 +57,15 @@ def get_last_game_score(games: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_next_game(games: pd.DataFrame) -> pd.Series:
-    future_games = games.loc[(games["gameDateTimeEst"] > T)]
+    future_games = games.loc[(games["date"] >= T.date())]
     next_game = future_games.iloc[0]
-    
+
     # convert to dataframe
     next_game = pd.DataFrame(next_game)
     next_game = next_game.transpose()
-    next_game = next_game[["gameDateTimeEst", "awayTeam", "homeTeam", "channel"]]
-
-    # split datetime into separate columns
-    next_game["gameDateTimeEst"] = pd.to_datetime(next_game["gameDateTimeEst"])
-    next_game["Date"] = next_game["gameDateTimeEst"].dt.date
-    next_game["Time"] = next_game["gameDateTimeEst"].dt.time
+    next_game = next_game[["awayTeam", "homeTeam", "channel", "date", "time"]]
 
     # drop datetime column and convert to series
-    next_game = next_game.drop(columns="gameDateTimeEst")
     next_game = next_game.iloc[0]
 
     return next_game
@@ -119,6 +121,24 @@ def get_team_schedule(team_id: int) -> pd.DataFrame:
     games['gameDateTimeEst'] = pd.to_datetime(games['gameDateTimeEst'], format="%Y-%m-%dT%H:%M:%S.%f", errors = 'coerce').dt.tz_localize(None)
 
     # get games of team
-    team_games = games.loc[((games['awayTeamID'] == team_id) | (games['homeTeamID'] == team_id)) & (games['gameDateTimeEst'] >= PRESEASON_DATE)]
+    team_games = games.loc[((games['awayTeamID'] == team_id) | (games['homeTeamID'] == team_id)) & (games['gameDateTimeEst'] >= PRESEASON_DATE)].copy()
+
+    team_games["date"] = team_games['gameDateTimeEst'].dt.date
+    team_games["time"] = team_games['gameDateTimeEst'].dt.time
+    team_games = team_games.drop("gameDateTimeEst", axis=1).copy()
 
     return team_games
+
+if __name__ == "__main__":
+    team_id = get_team_id("Golden State Warriors")
+    standings = get_league_standings()
+    games = get_team_schedule(team_id)
+    scores = get_last_game_score(games)
+    next_game = get_next_game(games)
+
+    print()
+    print(standings.to_string(index=False))
+    print()
+    print(scores.to_string(index=False))
+    print()
+    print(next_game.to_string())
